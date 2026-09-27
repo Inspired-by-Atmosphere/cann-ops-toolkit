@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# run_all.sh.example - remote build / check / benchmark / package template
+#
+# Contract expected by the toolkit (scripts/cannlab_auto.py, cannlab_watch.py):
+#   * invoked as   bash <REMOTE_WORK>/run_all.sh <budget_minutes>
+#   * writes everything into a fresh   <REMOTE_WORK>/run_<stamp>/   directory
+#     (cannlab_auto.py pulls back the newest run_* directory)
+#   * writes   <REMOTE_WORK>/STATUS.txt   as key=value lines with at least:
+#         RUN_STAMP=<stamp>      unique per run (used for report de-duplication)
+#         MAKE_RC=<int>          0 = build ok
+#         SMOKE=<one line>       short human-readable smoke result
+#         TARBALL=<abs path>     the packaged result tarball
+#   * touches  <REMOTE_WORK>/DONE          as the very last step
+#   * idempotent and re-runnable; never touches $REMOTE_WORK outside run_*
+#
+# The actual toolchain commands below are placeholders describing the stages, not
+# a runnable benchmark. Replace them with your own build/test/benchmark commands.
+# Nothing in this file is secret and nothing here is billed by the toolkit: it
+# runs on the machine the grabber won.
+set -uo pipefail
+
+BUDGET_MIN="${1:-45}"
+REMOTE_WORK="${CANNLAB_REMOTE_WORK:-/mnt/workspace/work}"
+
+STAMP="$(date +%y%m%d-%H%M%S)"
+RUN_DIR="$REMOTE_WORK/run_$STAMP"
+LOG="$RUN_DIR/run.log"
+TARBALL="$REMOTE_WORK/results_$STAMP.tar.gz"
+
+mkdir -p "$RUN_DIR"
+exec > >(tee -a "$LOG") 2>&1
+
+# Hard budget: the pipeline must stop by itself before the caller's timeout, so
+# the caller always gets a chance to pull partial results back.
+DEADLINE=$(( $(date +%s) + BUDGET_MIN * 60 ))
+remaining() { echo $(( DEADLINE - $(date +%s) )); }
+budget_ok() { [ "$(remaining)" -gt 120 ]; }
+
+echo "=== run $STAMP started, budget ${BUDGET_MIN}m ==="
+
+# STATUS.txt is written FIRST so that even a crash leaves a readable state.
+write_status() {
+  local rc="$1" smoke="$2"
+  {
+    echo "RUN_STAMP=$STAMP"
+    echo "MAKE_RC=$rc"
+    echo "SMOKE=$smoke"
+    echo "TARBALL=$TARBALL"
+    echo "RUN_DIR=$RUN_DIR"
+    echo "FINISHED_AT=$(date '+%F %T')"
+  } > "$REMOTE_WORK/STATUS.txt"
+}
+
+# Remove any stale DONE marker, otherwise the watchdog can pull a previous run.
+rm -f "$REMOTE_WORK/DONE"
+write_status -1 "started"
+
+MAKE_RC=-1
+SMOKE="not run"
+
+# --- 1. build ---------------------------------------------------------------
+echo "--- build ---"
+if [ -x ./build.sh ]; then
+  ./build.sh ; MAKE_RC=$?
+else
+  echo "(no ./build.sh here - insert your build command)"
+  MAKE_RC=0
+fi
+write_status "$MAKE_RC" "build rc=$MAKE_RC"
+if [ "$MAKE_RC" -ne 0 ]; then
+  echo "build failed - packaging what we have and stopping"
+  tar czf "$TARBALL" -C "$(dirname "$RUN_DIR")" "$(basename "$RUN_DIR")" || true
+  write_status "$MAKE_RC" "build rc=$MAKE_RC"
+  touch "$REMOTE_WORK/DONE"
+  exit "$MAKE_RC"
+fi
+
+# --- 2. smoke test ----------------------------------------------------------
+echo "--- smoke ---"
+if [ -x ./smoke.sh ]; then
+  SMOKE="$(./smoke.sh 2>&1 | tail -1)"
+else
+  SMOKE="skipped (no ./smoke.sh)"
+fi
+echo "smoke: $SMOKE"
+write_status "$MAKE_RC" "$SMOKE"
+
+# --- 3. parameter sweep -----------------------------------------------------
+# One row of CSV per shape so a later local check has real content to verify.
+echo "--- sweep ---"
+: > "$RUN_DIR/sweep.csv"
+echo "shape,iters,ms" >> "$RUN_DIR/sweep.csv"
+for shape in 128 256 512; do
+  budget_ok || { echo "out of budget before shape=$shape"; break; }
+  echo "  shape=$shape (replace with your real command)"
+  echo "$shape,,$(remaining)" >> "$RUN_DIR/sweep.csv"
+done
+
+# --- 4. profiling / extra artefacts ----------------------------------------
+echo "--- profile ---"
+if [ -x ./profile.sh ]; then
+  budget_ok && ./profile.sh || echo "skipped: out of budget"
+else
+  echo "(no ./profile.sh - insert your profiler command)"
+  nproc > "$RUN_DIR/env.txt" 2>/dev/null || true
+fi
+
+# --- 5. summary + package ---------------------------------------------------
+echo "--- package ---"
+{
+  echo "run=$STAMP"
+  echo "budget_min=$BUDGET_MIN"
+  echo "make_rc=$MAKE_RC"
+  echo "smoke=$SMOKE"
+  echo "finished_at=$(date '+%F %T')"
+} > "$RUN_DIR/SUMMARY.txt"
+
+tar czf "$TARBALL" -C "$(dirname "$RUN_DIR")" "$(basename "$RUN_DIR")"
+echo "tarball: $TARBALL ($(du -h "$TARBALL" | cut -f1))"
+
+# STATUS.txt LAST, then the DONE marker: the watchdog only acts when DONE exists.
+write_status "$MAKE_RC" "$SMOKE"
+touch "$REMOTE_WORK/DONE"
+echo "=== run $STAMP finished ==="

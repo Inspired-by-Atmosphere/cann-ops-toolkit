@@ -1,0 +1,33 @@
+# --- credentials & local state (never commit) ---
+.env
+*.cookie
+secrets/
+*state*.json
+*.state
+cannlab_auto.log
+cannlab_auto.result.json
+cannlab_report.seen
+
+# --- pipeline work & results ---
+work/
+results/
+run_*/
+*.tar.gz
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# --- editors / os ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- backup litter ---
+*.bak_*
+*.orig
+*~

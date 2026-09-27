@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# upload.sh.example - local -> remote sync template for cannlab_auto.py
+#
+# Contract expected by scripts/cannlab_auto.py:
+#   * lives at   $CANNLAB_WORK_DIR/upload.sh
+#   * argv[1]    the ssh host alias to push to (from $CANNLAB_SSH_ALIAS)
+#   * pushes the local project into the SAME path remotely that the remote run
+#     uses (`$CANNLAB_REMOTE_WORK`), so "uploaded but not found" cannot happen
+#   * must be idempotent: the pipeline may run it again after a failure
+#
+# Copy this file to $CANNLAB_WORK_DIR/upload.sh, adjust PROJ and EXCLUDES, then
+# chmod +x it. Nothing secret belongs in here: the ssh alias already carries the
+# credentials (via the ssh config written by cannlab_ssh.py).
+set -euo pipefail
+
+ALIAS="${1:?usage: upload.sh <ssh-alias>}"
+
+# Local project directory to ship. Relative to this script, or absolute.
+PROJ="${PROJ:-$(cd "$(dirname "$0")" && pwd)/proj}"
+
+# Remote destination. Keep this IDENTICAL to $CANNLAB_REMOTE_WORK.
+REMOTE_WORK="${CANNLAB_REMOTE_WORK:-/mnt/workspace/work}"
+
+# Never ship build output, caches, results or local state.
+EXCLUDES=(
+  --exclude '.git'
+  --exclude '__pycache__'
+  --exclude 'build/'
+  --exclude 'out/'
+  --exclude 'results/'
+  --exclude 'run_*'
+  --exclude '*.tar.gz'
+  --exclude '*.cookie'
+  --exclude '*.state'
+  --exclude '.env'
+)
+
+echo "[upload] $PROJ -> $ALIAS:$REMOTE_WORK"
+
+ssh -o BatchMode=yes "$ALIAS" "mkdir -p '$REMOTE_WORK'"
+
+# rsync keeps re-runs cheap. If rsync is unavailable on either side, fall back
+# to tar-over-ssh (also a single round trip, also preserves mtimes):
+if command -v rsync >/dev/null 2>&1 && \
+   ssh -o BatchMode=yes "$ALIAS" 'command -v rsync >/dev/null 2>&1'; then
+  rsync -az --delete "${EXCLUDES[@]}" \
+        -e "ssh -o BatchMode=yes" \
+        "$PROJ/" "$ALIAS:$REMOTE_WORK/"
+else
+  echo "[upload] rsync unavailable - falling back to tar over ssh"
+  tar czf - -C "$PROJ" "${EXCLUDES[@]/--exclude=/}" . \
+    | ssh -o BatchMode=yes "$ALIAS" "tar xzf - -C '$REMOTE_WORK'"
+fi
+
+# Fail loudly if the remote side did not actually receive the payload: a silent
+# empty upload only explodes later, at build time, which is far more expensive.
+COUNT=$(ssh -o BatchMode=yes "$ALIAS" "find '$REMOTE_WORK' -type f | wc -l")
+echo "[upload] remote file count: $COUNT"
+if [ "$COUNT" -lt 1 ]; then
+  echo "[upload] ERROR: nothing arrived on the remote side" >&2
+  exit 1
+fi
+
+echo "[upload] done"
