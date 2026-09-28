@@ -4,6 +4,18 @@ Small, dependency-light scripts that **grab a scarce accelerator slot, run a lon
 build/profile pipeline unattended, pull the results back, and release the slot** —
 written for an Ascend/NPU cloud dev-environment shop with metered accelerator hours.
 
+## Quick look
+
+```bash
+python -m pip install -r requirements.txt      # `requests`, nothing else
+export CANNLAB_COOKIE_FILE="$HOME/.config/cannlab/cookie.cookie"
+python scripts/cannlab_grab.py --status        # read-only: prints state, takes no slot
+```
+
+`--status` performs one read request and writes no state — it is the safe way to
+confirm your cookie file works before letting anything run on a schedule. Full
+setup, wiring and configuration table: see *Quickstart* and *Configuration* below.
+
 ## Why this exists
 
 When the resource you need is scarcer than the work itself, three things decide

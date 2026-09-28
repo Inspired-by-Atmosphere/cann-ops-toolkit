@@ -3,6 +3,16 @@
 一组轻依赖的小脚本：**抢到稀缺的加速卡时段 → 无人值守跑完长流水线 → 结果拉回本地 → 释放时段**。
 面向按卡时计费的昇腾（Ascend/NPU）云开发环境。
 
+## 先看一眼
+
+```bash
+python -m pip install -r requirements.txt      # 只需要 `requests`
+export CANNLAB_COOKIE_FILE="$HOME/.config/cannlab/cookie.cookie"
+python scripts/cannlab_grab.py --status        # 只读：打印状态，不占卡
+```
+
+`--status` 只发一次读请求、不写任何状态——在用调度器跑起来之前，先用它确认 cookie 文件是通的。完整安装、接线与配置表见下面《快速开始》和《配置》两节。
+
 ## 为什么需要它
 
 当"资源比任务本身还稀缺"时，能不能干成事取决于三件事：
